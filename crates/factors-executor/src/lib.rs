@@ -180,14 +180,33 @@ impl<T: RuntimeFactors, U: Send + 'static> FactorsExecutorApp<T, U> {
         &self,
         make_state: impl Fn() -> U,
     ) -> anyhow::Result<()> {
+        let total_start = std::time::Instant::now();
+        tracing::debug!(
+            component_count = self.component_instance_pres.len(),
+            "starting component prewarm"
+        );
         for component_id in self.component_instance_pres.keys() {
+            let t = std::time::Instant::now();
+            tracing::debug!(component_id, "prewarming component");
             let builder = self.prepare(component_id)?;
+            let prepare_elapsed = t.elapsed();
+            let t2 = std::time::Instant::now();
             builder
                 .instantiate(make_state())
                 .await
                 .with_context(|| format!("failed to prewarm component {component_id:?}"))?;
-            tracing::debug!(component_id, "component pre-warmed");
+            tracing::debug!(
+                component_id,
+                prepare_ms = prepare_elapsed.as_millis(),
+                instantiate_ms = t2.elapsed().as_millis(),
+                total_ms = t.elapsed().as_millis(),
+                "component pre-warmed"
+            );
         }
+        tracing::debug!(
+            total_prewarm_ms = total_start.elapsed().as_millis(),
+            "all components pre-warmed"
+        );
         Ok(())
     }
 
@@ -293,7 +312,13 @@ impl<T: RuntimeFactors, U: Send> FactorsInstanceBuilder<'_, T, U> {
             CpuTimeCallHook.handle_call_event::<T, U>(store.data_mut(), hook)
         });
 
+        let t_instantiate = std::time::Instant::now();
         let instance = self.instance_pre.instantiate_async(&mut store).await?;
+        tracing::debug!(
+            component_id = store.data().component_id,
+            instantiate_async_ms = t_instantiate.elapsed().as_millis(),
+            "wasmtime instantiate_async completed"
+        );
 
         // Track memory usage after instantiation in the instance state.
         // Note: This only applies if the component has initial memory reservations.
