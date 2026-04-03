@@ -181,13 +181,10 @@ impl<T: RuntimeFactors, U: Send + 'static> FactorsExecutorApp<T, U> {
         make_state: impl Fn() -> U,
     ) -> anyhow::Result<()> {
         let total_start = std::time::Instant::now();
-        tracing::debug!(
-            component_count = self.component_instance_pres.len(),
-            "starting component prewarm"
-        );
+        eprintln!("[PREWARM] starting prewarm for {} component(s)", self.component_instance_pres.len());
         for component_id in self.component_instance_pres.keys() {
             let t = std::time::Instant::now();
-            tracing::debug!(component_id, "prewarming component");
+            eprintln!("[PREWARM] prewarming component '{component_id}'");
             let builder = self.prepare(component_id)?;
             let prepare_elapsed = t.elapsed();
             let t2 = std::time::Instant::now();
@@ -195,18 +192,14 @@ impl<T: RuntimeFactors, U: Send + 'static> FactorsExecutorApp<T, U> {
                 .instantiate(make_state())
                 .await
                 .with_context(|| format!("failed to prewarm component {component_id:?}"))?;
-            tracing::debug!(
-                component_id,
-                prepare_ms = prepare_elapsed.as_millis(),
-                instantiate_ms = t2.elapsed().as_millis(),
-                total_ms = t.elapsed().as_millis(),
-                "component pre-warmed"
+            eprintln!(
+                "[PREWARM] component '{component_id}' done: prepare={}ms instantiate={}ms total={}ms",
+                prepare_elapsed.as_millis(),
+                t2.elapsed().as_millis(),
+                t.elapsed().as_millis(),
             );
         }
-        tracing::debug!(
-            total_prewarm_ms = total_start.elapsed().as_millis(),
-            "all components pre-warmed"
-        );
+        eprintln!("[PREWARM] all components pre-warmed in {}ms", total_start.elapsed().as_millis());
         Ok(())
     }
 
@@ -314,10 +307,10 @@ impl<T: RuntimeFactors, U: Send> FactorsInstanceBuilder<'_, T, U> {
 
         let t_instantiate = std::time::Instant::now();
         let instance = self.instance_pre.instantiate_async(&mut store).await?;
-        tracing::debug!(
-            component_id = store.data().component_id,
-            instantiate_async_ms = t_instantiate.elapsed().as_millis(),
-            "wasmtime instantiate_async completed"
+        eprintln!(
+            "[INSTANTIATE] component '{}' instantiate_async={}ms",
+            store.data().component_id,
+            t_instantiate.elapsed().as_millis(),
         );
 
         // Track memory usage after instantiation in the instance state.

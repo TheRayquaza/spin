@@ -246,12 +246,12 @@ impl<F: RuntimeFactors> HttpServer<F> {
     async fn serve_http(self: Arc<Self>, listener: TcpListener) -> anyhow::Result<()> {
         self.print_startup_msgs("http", &listener)?;
         let t_prewarm = std::time::Instant::now();
-        tracing::debug!("starting HTTP prewarm");
+        eprintln!("[HTTP] starting prewarm");
         self.trigger_app
             .prewarm_components(|| ())
             .await
             .unwrap_or_else(|e| tracing::warn!("component prewarm failed (non-fatal): {e}"));
-        tracing::debug!(prewarm_ms = t_prewarm.elapsed().as_millis(), "HTTP prewarm done, accepting connections");
+        eprintln!("[HTTP] prewarm done in {}ms, accepting connections", t_prewarm.elapsed().as_millis());
         loop {
             let (stream, client_addr) = listener.accept().await?;
             self.clone()
@@ -266,12 +266,12 @@ impl<F: RuntimeFactors> HttpServer<F> {
     ) -> anyhow::Result<()> {
         self.print_startup_msgs("https", &listener)?;
         let t_prewarm = std::time::Instant::now();
-        tracing::debug!("starting HTTPS prewarm");
+        eprintln!("[HTTPS] starting prewarm");
         self.trigger_app
             .prewarm_components(|| ())
             .await
             .unwrap_or_else(|e| tracing::warn!("component prewarm failed (non-fatal): {e}"));
-        tracing::debug!(prewarm_ms = t_prewarm.elapsed().as_millis(), "HTTPS prewarm done, accepting connections");
+        eprintln!("[HTTPS] prewarm done in {}ms, accepting connections", t_prewarm.elapsed().as_millis());
         let acceptor = tls_config.server_config()?;
         loop {
             let (stream, client_addr) = listener.accept().await?;
@@ -387,9 +387,9 @@ impl<F: RuntimeFactors> HttpServer<F> {
         executor: &Option<HttpExecutorType>,
     ) -> anyhow::Result<Response<Body>> {
         let t_request = std::time::Instant::now();
-        tracing::debug!(component_id, "preparing instance builder");
+        eprintln!("[REQUEST] component '{component_id}' - preparing instance");
         let mut instance_builder = self.trigger_app.prepare(component_id)?;
-        tracing::debug!(component_id, prepare_ms = t_request.elapsed().as_millis(), "instance builder prepared");
+        eprintln!("[REQUEST] component '{component_id}' - prepare={}ms", t_request.elapsed().as_millis());
 
         // Set up outbound HTTP request origin and service chaining
         // The outbound HTTP factor is required since both inbound and outbound wasi HTTP
@@ -448,11 +448,10 @@ impl<F: RuntimeFactors> HttpServer<F> {
                     .await
             }
         };
-        tracing::debug!(
-            component_id,
-            execute_ms = t_execute.elapsed().as_millis(),
-            total_request_ms = t_request.elapsed().as_millis(),
-            "wasm component execution completed"
+        eprintln!(
+            "[REQUEST] component '{component_id}' - execute={}ms total={}ms",
+            t_execute.elapsed().as_millis(),
+            t_request.elapsed().as_millis(),
         );
         match res {
             Ok(res) => Ok(MatchedRoute::with_response_extension(
