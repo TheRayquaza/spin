@@ -251,6 +251,8 @@ impl<F: RuntimeFactors> HttpServer<F> {
             .prewarm_components(|| ())
             .await
             .unwrap_or_else(|e| tracing::warn!("component prewarm failed (non-fatal): {e}"));
+        eprintln!("[HTTP] factor prewarm done in {}ms", t_prewarm.elapsed().as_millis());
+        self.prewarm_wasip3_handlers().await;
         eprintln!("[HTTP] prewarm done in {}ms, accepting connections", t_prewarm.elapsed().as_millis());
         loop {
             let (stream, client_addr) = listener.accept().await?;
@@ -271,6 +273,8 @@ impl<F: RuntimeFactors> HttpServer<F> {
             .prewarm_components(|| ())
             .await
             .unwrap_or_else(|e| tracing::warn!("component prewarm failed (non-fatal): {e}"));
+        eprintln!("[HTTPS] factor prewarm done in {}ms", t_prewarm.elapsed().as_millis());
+        self.prewarm_wasip3_handlers().await;
         eprintln!("[HTTPS] prewarm done in {}ms, accepting connections", t_prewarm.elapsed().as_millis());
         let acceptor = tls_config.server_config()?;
         loop {
@@ -586,6 +590,49 @@ impl<F: RuntimeFactors> HttpServer<F> {
         }
         .instrument(span)
         .await
+    }
+
+    /// Pre-warm wasip3 components by spawning a no-op task through each ProxyHandler.
+    ///
+    /// This forces each ProxyHandler to start a worker and instantiate the underlying
+    /// wasm component, so that the first real request doesn't pay the cold-start penalty.
+    async fn prewarm_wasip3_handlers(&self) {
+        use futures::channel::oneshot;
+
+        let mut futures = Vec::new();
+        for (component_id, handler_type) in &self.component_handler_types {
+            if let HandlerType::Wasi0_3(proxy_handler) = handler_type {
+                let component_id = component_id.clone();
+                let (tx, rx) = oneshot::channel::<()>();
+                let tx = std::sync::Mutex::new(Some(tx));
+                let t_start = std::time::Instant::now();
+                eprintln!("[WASIP3-PREWARM] starting prewarm for component '{component_id}'");
+                proxy_handler.spawn(
+                    None,
+                    Box::new(move |_store, _proxy| {
+                        Box::pin(async move {
+                            // Signal that instantiation is complete; the worker is now live.
+                            if let Some(tx) = tx.lock().unwrap().take() {
+                                let _ = tx.send(());
+                            }
+                        })
+                    }),
+                );
+                let component_id_clone = component_id.clone();
+                futures.push(async move {
+                    match tokio::time::timeout(Duration::from_secs(5), rx).await {
+                        Ok(_) => eprintln!(
+                            "[WASIP3-PREWARM] component '{component_id_clone}' warmed in {}ms",
+                            t_start.elapsed().as_millis()
+                        ),
+                        Err(_) => eprintln!(
+                            "[WASIP3-PREWARM] component '{component_id_clone}' prewarm timed out after 5s (non-fatal)"
+                        ),
+                    }
+                });
+            }
+        }
+        futures::future::join_all(futures).await;
     }
 
     fn print_startup_msgs(&self, scheme: &str, listener: &TcpListener) -> anyhow::Result<()> {
