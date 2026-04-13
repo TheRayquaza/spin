@@ -44,13 +44,20 @@ impl<F: RuntimeFactors> Wasip3HttpExecutor<'_, F> {
         // .in_current_span() evaluated inside the callback would capture the wasmtime
         // thread's empty span context instead, losing all events.
         let execute_span = tracing::Span::current();
+        eprintln!(
+            "[wasip3:debug] execute() called — span disabled={} id={:?}",
+            execute_span.is_disabled(),
+            execute_span.id()
+        );
         let before_spawn = std::time::Instant::now();
         self.0.spawn(
             None,
             Box::new(move |store: &Accessor<_>, guest: &Proxy| {
                 let instance_acquire_ms = before_spawn.elapsed().as_millis() as u64;
+                eprintln!("[wasip3:debug] spawn callback invoked — instance_acquire_ms={instance_acquire_ms}");
                 Box::pin(
                     async move {
+                        eprintln!("[wasip3:debug] async block polled — emitting tracing events");
                         tracing::info!(instance_acquire_ms, "wasm instance acquired");
 
                         let Proxy::P3(guest) = guest else {
@@ -66,8 +73,10 @@ impl<F: RuntimeFactors> Wasip3HttpExecutor<'_, F> {
                             .wasi_http_handler()
                             .call_handle(store, request)
                             .await?;
+                        let wasm_call_ms = wasm_call_start.elapsed().as_millis() as u64;
+                        eprintln!("[wasip3:debug] call_handle complete — wasm_call_ms={wasm_call_ms}");
                         tracing::info!(
-                            wasm_call_ms = wasm_call_start.elapsed().as_millis() as u64,
+                            wasm_call_ms,
                             "wasm call_handle complete"
                         );
                         let response = store.with(|mut store| {
