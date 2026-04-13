@@ -39,11 +39,20 @@ impl<F: RuntimeFactors> Wasip3HttpExecutor<'_, F> {
         let (request, request_io_result) = types::Request::from_http(request);
 
         let (tx, rx) = oneshot::channel();
+        // Snapshot the current span NOW (on the HTTP handler thread, inside execute_wasm)
+        // before crossing into the wasmtime executor thread via spawn().
+        // .in_current_span() evaluated inside the callback would capture the wasmtime
+        // thread's empty span context instead, losing all events.
+        let execute_span = tracing::Span::current();
+        let before_spawn = std::time::Instant::now();
         self.0.spawn(
             None,
             Box::new(move |store: &Accessor<_>, guest: &Proxy| {
+                let instance_acquire_ms = before_spawn.elapsed().as_millis() as u64;
                 Box::pin(
                     async move {
+                        tracing::info!(instance_acquire_ms, "wasm instance acquired");
+
                         let Proxy::P3(guest) = guest else {
                             unreachable!();
                         };
@@ -52,10 +61,15 @@ impl<F: RuntimeFactors> Wasip3HttpExecutor<'_, F> {
                             anyhow::Ok(wasi_http::<F>(store.data_mut())?.table.push(request)?)
                         })?;
 
+                        let wasm_call_start = std::time::Instant::now();
                         let (response, task) = guest
                             .wasi_http_handler()
                             .call_handle(store, request)
                             .await?;
+                        tracing::info!(
+                            wasm_call_ms = wasm_call_start.elapsed().as_millis() as u64,
+                            "wasm call_handle complete"
+                        );
                         let response = store.with(|mut store| {
                             anyhow::Ok(wasi_http::<F>(store.get())?.table.delete(response?)?)
                         })?;
@@ -69,7 +83,7 @@ impl<F: RuntimeFactors> Wasip3HttpExecutor<'_, F> {
 
                         anyhow::Ok(())
                     }
-                    .in_current_span()
+                    .instrument(execute_span)
                     .map(|result| {
                         if let Err(error) = result {
                             tracing::error!("Component error handling request: {error:?}");
